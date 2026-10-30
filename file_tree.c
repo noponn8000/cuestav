@@ -8,6 +8,88 @@
 #include <stdbool.h>
 
 #include "file_tree.h"
+#include "array.h"
+
+FileView* get_files(const char* path) {
+  // Directory stream
+  DIR* dir;
+  // Directory entry pointer
+  struct dirent* dp;    
+  // Buffer for stat (contains file metadata)
+  struct stat statbuf;
+  // Create a directory file descriptor from the `path`
+  int dfd = open(path, O_RDONLY);
+  // And a file descriptor for the files in the above dir
+  int ffd;
+
+  // Using fdopendir over opendir to avoid race conditions
+  dir = fdopendir(dfd);
+
+  // Buffer for resolving paths.
+  char buf[PATH_MAX + 1];
+
+  FileView* files = NULL;
+  
+  if (dir == NULL) {
+    perror("fdopendir");
+    return NULL;
+  }
+
+  while ((dp = readdir(dir))) {
+    // Clear path buffer
+    memset(buf, 0, sizeof(buf));
+
+    ffd = openat(dfd, dp->d_name, O_RDONLY);
+    if (ffd == -1) {
+      perror ("openat");
+      return NULL;
+    }
+
+    // Fill the stat buffer
+    fstat(ffd, &statbuf);
+    // We don't care about the file descriptor anymore
+    close(ffd);
+
+    FileView file = {
+      .isRegular = true,
+      .type = OTHER,
+    };
+
+    // Now we can use the S_IS... macros to find the type of the file
+    // We only care about directories and regular files
+    if (S_ISREG(statbuf.st_mode)) {
+      int dot_index = -1;
+      for (int i = strlen(dp->d_name); i >= 0; i--) {
+        if (dp->d_name[i] == '.') {
+          dot_index = i;
+          break;
+        }
+      }
+
+      if (dot_index != -1) {
+        char* extension = dp->d_name + dot_index;
+        if (strcasecmp(extension, ".cue") == 0) {
+          file.type = CUE;
+        }
+      }
+    } else if (S_ISDIR(statbuf.st_mode)) {
+      file.isRegular = false;
+    } else {
+      // Not a directory nor file. Not including this
+      continue;
+    }
+    
+    file.path = malloc(sizeof(char) * PATH_MAX + 1);
+    // Construct absolute path
+    make_path(path, buf, dp->d_name);
+    strcpy(file.path, buf);
+
+    arr_push(files, file);
+  }  
+  (void) closedir(dir);
+
+  return files;
+}
 
 void filetree_free(FileTree_t tree) {
   if (tree->right != NULL) {
@@ -106,6 +188,9 @@ FileTree_t filetree_construct(const char* path, const char** extensions, int n_e
     
     // Fill the stat buffer
     fstat(ffd, &statbuf);
+    // We don't care about the file descriptor anymore
+    close(ffd);
+
     // Now we can use the S_IS... macros to find the type of the file
     // We only care about directories and regular files
     bool matches_any = false;
@@ -144,8 +229,6 @@ FileTree_t filetree_construct(const char* path, const char** extensions, int n_e
       // Recur into the subdirectory
       current->bottom = filetree_construct(buf, extensions, n_extensions);
     }
-
-    close(ffd);
   }  
   (void) closedir(dir);
 

@@ -1,6 +1,6 @@
 CC      := gcc
 CFLAGS  := -Wall -Wextra -O2 
-LDFLAGS := -lm
+LDFLAGS := -lm -lncursesw -lpanel -lmenu
 
 TARGET  := cuestav
 SRC     := main.c file_tree.c cuefile.c
