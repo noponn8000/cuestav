@@ -27,6 +27,7 @@ FileView* get_files(const char* path) {
 
   // Buffer for resolving paths.
   char buf[PATH_MAX + 1];
+  char scratch[PATH_MAX + 1];
 
   FileView* files = NULL;
   
@@ -38,6 +39,7 @@ FileView* get_files(const char* path) {
   while ((dp = readdir(dir))) {
     // Clear path buffer
     memset(buf, 0, sizeof(buf));
+    memset(scratch, 0, sizeof(buf));
 
     ffd = openat(dfd, dp->d_name, O_RDONLY);
     if (ffd == -1) {
@@ -49,6 +51,11 @@ FileView* get_files(const char* path) {
     fstat(ffd, &statbuf);
     // We don't care about the file descriptor anymore
     close(ffd);
+
+    // Don't care about hidden files, only the up directory
+    if (*dp->d_name == '.') {
+      if (strcmp(dp->d_name, "..") != 0) continue;
+    }
 
     FileView file = {
       .isRegular = true,
@@ -81,7 +88,11 @@ FileView* get_files(const char* path) {
     
     file.path = malloc(sizeof(char) * PATH_MAX + 1);
     // Construct absolute path
-    make_path(path, buf, dp->d_name);
+    make_path(path, scratch, dp->d_name);
+    if (realpath(scratch, buf) == NULL) {
+      perror("realpath");
+      exit(1);
+    }
     strcpy(file.path, buf);
 
     arr_push(files, file);
