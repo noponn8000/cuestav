@@ -6,6 +6,7 @@
 
 #include "cuefile.h"
 #include "array.h"
+#include "stringview.h"
 
 bool consume(char** s, uint8_t bytes) {
     for (int i = 0; i < bytes; i++) {
@@ -70,8 +71,8 @@ bool FCUE_ParseCUE(char* path, CueFile* cue) {
     FILE *fp = fopen(path, "r");
     if (!fp) return false;
 
-    char line[512];
-    char currentFile[512];
+    char line[1024];
+    char currentFile[1024];
     char sIndex[3] = {0};
 
     currentFile[0] = '\0';
@@ -80,13 +81,15 @@ bool FCUE_ParseCUE(char* path, CueFile* cue) {
     CueTrack* tracks = NULL;
 
     char *p;
+    StringView linestr;
     while (fgets(line, sizeof line, fp)) {
+        linestr = str_of_cstr(line);
         p = line;
-        trimWL(&p);
+        str_trim_by_predicate(&linestr, isspace);
         // Blank line
-        if (!*p) continue;
+        if (linestr.count == 0) continue;
 
-        if (strncmp("REM GENRE", p, 9) == 0) {
+        if (str_starts_with(linestr, str_of_cstr("REM GENRE"))) {
            consume(&p, 9);
            trimWL(&p);
            trimWR(p);

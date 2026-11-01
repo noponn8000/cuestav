@@ -11,6 +11,7 @@
 
 #include "file_tree.h"
 #include "array.h"
+#include "cuefile.h"
 
 // Note: tilde is not expanded in this path. That is done by the shell.
 #define DEFAULT_ROOT_DIRECTORY "/home/ferenc/Music"
@@ -52,6 +53,21 @@ FileView* change_dir(FileView* files, int i) {
   return NULL;
 }
 
+CueFile* openCue(FileView* files, int i) {
+  fprintf(stderr, "%d\n", get_file_type(files[i].path));
+  if (i >= 0 && i < arr_len(files) && files[i].isRegular && get_file_type(files[i].path) == CUE) {
+      CueFile *cue = {0};
+      if (FCUE_ParseCUE(files[i].path, cue)) {
+        fprintf(stderr, "sucess"); return cue;
+      } else {
+        fprintf(stderr, "faliure");
+        return NULL;
+      }
+  }
+
+  return NULL;
+}
+
 void make_windows(WINDOW** left, WINDOW** right, int* wlx, int* wly, int* wrx, int* wry) {
   if (left != NULL)
     delwin(*left);
@@ -79,6 +95,9 @@ int main(int argc, char** argv) {
   strcpy(CURRENT_DIR, path);
 
   FileView* files = get_files(path);
+  CueFile** cues = NULL;
+  // We have to init manually or otherwise arr_len will SIGSEV
+  arr_init(cues);
 
   WINDOW *win_left;
   WINDOW *win_right;
@@ -129,10 +148,18 @@ int main(int argc, char** argv) {
       // return key. doesn't work with KEY_ENTER for some reason
       case 10:
         if (tabLeft) {
+          if (listIndex < arr_len(files) && listIndex >= 0 && !files[listIndex].isRegular) {
           FileView *newFiles = change_dir(files, listIndex);
-          if (newFiles != NULL) {
-            arr_free(files);
-            files = newFiles;
+            if (newFiles != NULL) {
+              arr_free(files);
+              files = newFiles;
+            }
+          } else {
+            CueFile* cue = openCue(files, listIndex);
+            if (cue != NULL) {
+              fprintf(stderr, "Failed to read .cue file\n");
+              arr_push(cues, cue);
+            }
           }
         }
         break;
@@ -177,6 +204,18 @@ int main(int argc, char** argv) {
       waddnstr(win_left, files[i].path, wlx - 4);
 
       wattroff(win_left, COLOR_PAIR(2) | COLOR_PAIR(3) | A_BOLD);
+    }
+
+    // Draw cuesheets
+
+    CueFile *currentCue;
+    CueTrack currentTrack;
+    for (int i = 0; i < arr_len(cues); i++) {
+      currentCue = cues[i];
+      for (int j = 0; j < arr_len(currentCue->tracks); i++) {
+        currentTrack = currentCue->tracks[i];
+        waddnstr(win_right, currentTrack.title, wrx - 4);
+      }
     }
 
     wattron(win_right, A_BOLD);

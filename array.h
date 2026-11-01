@@ -7,6 +7,14 @@ typedef struct {
   size_t capacity;
 } Header;
 
+#define arr_init(arr)                                                              \
+  do {                                                                             \
+      Header* header = malloc(sizeof(*arr) * ARR_INIT_CAPACITY + sizeof(Header));  \
+      header->count = 0;                                                           \
+      header->capacity = ARR_INIT_CAPACITY;                                        \
+      arr = (void*)(header + 1);                                                   \
+  } while (0)
+
 #define arr_push(arr, x)                                                           \
   do {                                                                             \
     if (arr == NULL) {                                                             \

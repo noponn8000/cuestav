@@ -1,9 +1,9 @@
 CC      := gcc
-CFLAGS  := -Wall -Wextra -O2 
+CFLAGS  := -Wall -Wextra -O2 -g
 LDFLAGS := -lm -lncursesw -lpanel -lmenu
 
 TARGET  := cuestav
-SRC     := main.c file_tree.c cuefile.c
+SRC     := main.c file_tree.c cuefile.c stringview.c
 OBJ     := $(SRC:.c=.o)
 
 all: $(TARGET)

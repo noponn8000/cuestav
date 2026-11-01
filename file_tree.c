@@ -1,20 +1,42 @@
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-#include "file_tree.h"
 #include "array.h"
+#include "file_tree.h"
 
-FileView* get_files(const char* path) {
+FileType get_file_type(const char *filename) {
+  int dot_index = -1;
+  size_t length = strlen(filename);
+  if (length <= 1) return OTHER;
+  
+  for (int i = length - 1; i >= 0; i--) {
+    if (filename[i] == '.') {
+      dot_index = i;
+      break;
+    }
+  }
+
+  if (dot_index != -1) {
+    const char* extension = filename + dot_index;
+    if (strcasecmp(extension, ".cue") == 0) {
+      return CUE;
+    }
+  }
+
+  return OTHER;
+}
+
+FileView *get_files(const char *path) {
   // Directory stream
-  DIR* dir;
+  DIR *dir;
   // Directory entry pointer
-  struct dirent* dp;    
+  struct dirent *dp;
   // Buffer for stat (contains file metadata)
   struct stat statbuf;
   // Create a directory file descriptor from the `path`
@@ -29,8 +51,8 @@ FileView* get_files(const char* path) {
   char buf[PATH_MAX + 1];
   char scratch[PATH_MAX + 1];
 
-  FileView* files = NULL;
-  
+  FileView *files = NULL;
+
   if (dir == NULL) {
     perror("fdopendir");
     return NULL;
@@ -43,7 +65,7 @@ FileView* get_files(const char* path) {
 
     ffd = openat(dfd, dp->d_name, O_RDONLY);
     if (ffd == -1) {
-      perror ("openat");
+      perror("openat");
       return NULL;
     }
 
@@ -54,38 +76,26 @@ FileView* get_files(const char* path) {
 
     // Don't care about hidden files, only the up directory
     if (*dp->d_name == '.') {
-      if (strcmp(dp->d_name, "..") != 0) continue;
+      if (strcmp(dp->d_name, "..") != 0)
+        continue;
     }
 
     FileView file = {
-      .isRegular = true,
-      .type = OTHER,
+        .isRegular = true,
+        .type = OTHER,
     };
 
     // Now we can use the S_IS... macros to find the type of the file
     // We only care about directories and regular files
     if (S_ISREG(statbuf.st_mode)) {
-      int dot_index = -1;
-      for (int i = strlen(dp->d_name); i >= 0; i--) {
-        if (dp->d_name[i] == '.') {
-          dot_index = i;
-          break;
-        }
-      }
-
-      if (dot_index != -1) {
-        char* extension = dp->d_name + dot_index;
-        if (strcasecmp(extension, ".cue") == 0) {
-          file.type = CUE;
-        }
-      }
+      file.type = get_file_type(dp->d_name);
     } else if (S_ISDIR(statbuf.st_mode)) {
       file.isRegular = false;
     } else {
       // Not a directory nor file. Not including this
       continue;
     }
-    
+
     file.path = malloc(sizeof(char) * PATH_MAX + 1);
     // Construct absolute path
     make_path(path, scratch, dp->d_name);
@@ -96,8 +106,8 @@ FileView* get_files(const char* path) {
     strcpy(file.path, buf);
 
     arr_push(files, file);
-  }  
-  (void) closedir(dir);
+  }
+  (void)closedir(dir);
 
   return files;
 }
@@ -106,7 +116,7 @@ void filetree_free(FileTree_t tree) {
   if (tree->right != NULL) {
     filetree_free(tree->right);
   }
-  if (tree -> bottom != NULL) {
+  if (tree->bottom != NULL) {
     filetree_free(tree->bottom);
   }
 
@@ -114,33 +124,36 @@ void filetree_free(FileTree_t tree) {
 }
 
 // Helper to concatenate cwd with relative path and insert slash if necessary
-void make_path(const char* cwd, char* buf, char* relative) {
-    // First copy the current working directory path into the buffer
-    strcpy(buf, cwd);
-    // Insert a slash if there isn't one
-    if (buf[strlen(buf) - 1] != '/' && relative[0] != '/')
-       buf[strlen(buf)] = '/'; 
+void make_path(const char *cwd, char *buf, char *relative) {
+  // First copy the current working directory path into the buffer
+  strcpy(buf, cwd);
+  // Insert a slash if there isn't one
+  if (buf[strlen(buf) - 1] != '/' && relative[0] != '/')
+    buf[strlen(buf)] = '/';
 
-    strcat(buf, relative);
+  strcat(buf, relative);
 }
 
-bool check_extension(const char* filename, const char* extension) {
+bool check_extension(const char *filename, const char *extension) {
   int l1 = strlen(filename);
   int l2 = strlen(extension);
-  if (l1 < l2 || l1 == 0 || l2 == 0) return false;
+  if (l1 < l2 || l1 == 0 || l2 == 0)
+    return false;
 
   for (int i1 = l1 - 1, i2 = l2 - 1; i1 > 0 && i2 > 0; i1--, i2--) {
     if (filename[i1] != extension[i2])
       return false;
 
-    if (filename[i1] == '.') break;
+    if (filename[i1] == '.')
+      break;
   }
 
   return true;
 }
 
 void filetree_draw(FileTree_t tree, int depth) {
-  if (tree == NULL) return;
+  if (tree == NULL)
+    return;
 
   FileTree_t current = tree;
   while (current != NULL) {
@@ -156,11 +169,12 @@ void filetree_draw(FileTree_t tree, int depth) {
   }
 }
 
-FileTree_t filetree_construct(const char* path, const char** extensions, int n_extensions) {
+FileTree_t filetree_construct(const char *path, const char **extensions,
+                              int n_extensions) {
   // Directory stream
-  DIR* dir;
+  DIR *dir;
   // Directory entry pointer
-  struct dirent* dp;    
+  struct dirent *dp;
   // Buffer for stat (contains file metadata)
   struct stat statbuf;
   // Create a directory file descriptor from the `path`
@@ -189,14 +203,14 @@ FileTree_t filetree_construct(const char* path, const char** extensions, int n_e
 
     ffd = openat(dfd, dp->d_name, O_RDONLY);
     if (ffd == -1) {
-      perror ("openat");
+      perror("openat");
       return NULL;
     }
 
     // Skip hidden directories and . / ..
     if (dp->d_name[0] == '.')
       continue;
-    
+
     // Fill the stat buffer
     fstat(ffd, &statbuf);
     // We don't care about the file descriptor anymore
@@ -213,7 +227,8 @@ FileTree_t filetree_construct(const char* path, const char** extensions, int n_e
         }
       }
 
-      if (!matches_any) continue;
+      if (!matches_any)
+        continue;
     }
 
     current = malloc(sizeof(struct FileTree));
@@ -240,8 +255,8 @@ FileTree_t filetree_construct(const char* path, const char** extensions, int n_e
       // Recur into the subdirectory
       current->bottom = filetree_construct(buf, extensions, n_extensions);
     }
-  }  
-  (void) closedir(dir);
+  }
+  (void)closedir(dir);
 
   return root;
 }
