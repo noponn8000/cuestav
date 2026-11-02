@@ -1,204 +1,143 @@
-#include <string.h>
-#include <stdio.h>
 #include <ctype.h>
-#include <stdlib.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#include "cuefile.h"
 #include "array.h"
-#include "stringview.h"
+#include "cuefile.h"
 
-bool consume(char** s, uint8_t bytes) {
-    for (int i = 0; i < bytes; i++) {
-        // Premature terminator
-        if (**s == '\0') return false;
+static const StringView REM_GENRE   = SV("REM GENRE");
+static const StringView REM_DATE    = SV("REM DATE");
+static const StringView REM_DISCID  = SV("REM DISCID");
+static const StringView REM_COMMENT = SV("REM COMMENT");
+static const StringView PERFORMER   = SV("PERFORMER");
+static const StringView TITLE       = SV("TITLE");
+static const StringView FILE_KW     = SV("FILE");
+static const StringView TRACK       = SV("TRACK");
+static const StringView ISRC        = SV("ISRC");
+static const StringView INDEX       = SV("INDEX");
 
-        (*s)++;
-    }
-
-    return **s != '\0';
+static StringView value(StringView s) {
+  str_trim_by_predicate(&s, isspace);
+  if (str_eat_char(&s, '"'))
+    return str_split_by_delim(&s, '"');
+  return s;
 }
 
-void trimWL(char** s) {
-    while (isspace((unsigned char)**s)) {
-        (*s)++;
-    }
+static StringView token(StringView *s) {
+  str_trim_by_predicate(s, isspace);
+  if (str_eat_char(s, '"'))
+    return str_split_by_delim(s, '"');
+  return str_split_by_predicate(s, isspace);
 }
 
-static void trimWR(char *s) {
-    size_t n = strlen(s);
-    while (n && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
+// Parses "INDEX ii mm:ss:ff". Returns the index number, or 100 on failure.
+uint8_t FCUE_ParseTimestamp(CueTimestamp *timestamp, StringView line) {
+  int ii, mm, ss, ff;
+
+  if (!str_eat_prefix(&line, INDEX))
+    return 100;
+  str_trim_by_predicate(&line, isspace);
+
+  if (!str_parse_uint(&line, &ii))
+    return 100;
+  str_trim_by_predicate(&line, isspace);
+
+  if (!str_parse_uint(&line, &mm) || !str_eat_char(&line, ':') ||
+      !str_parse_uint(&line, &ss) || !str_eat_char(&line, ':') ||
+      !str_parse_uint(&line, &ff))
+    return 100;
+
+  timestamp->mm = mm;
+  timestamp->ss = ss;
+  timestamp->ff = ff;
+  return (uint8_t)ii;
 }
 
-static char* unquote(char* s) {
-    if (*s != '"') return s;
-    s++;
-    char* end = strchr(s, '"');
-    if (end) *end = '\0';
-    return s;
+void FCUE_FreeCUE(CueFile *cue) {
+  for (int i = 0; i < arr_len(cue->tracks); i++) {
+    free(cue->tracks[i].title);
+    free(cue->tracks[i].performer);
+    free(cue->tracks[i].file);
+    free(cue->tracks[i].isrc);
+  }
+
+  arr_free(cue->tracks);
+  free(cue);
 }
 
-static char* unquoteFile(char* s) {
-    if (*s == '"') return unquote(s);
-    char* e = s;
-    while (*e && !isspace((unsigned char)*e)) e++;
-    *e = '\0';
-    return s;
-}
+bool FCUE_ParseCUE(char *path, CueFile *cue) {
+  FILE *fp = fopen(path, "r");
+  if (!fp)
+    return false;
 
-uint8_t FCUE_ParseTimestamp(CueTimestamp* timestamp, char* stamp) {
-    // Not an index
-    if (strncmp("INDEX", stamp, 5) != 0)  {
-        return 100;
-    }
+  char line[1024];
+  char *currentFile = NULL;
+  bool inTrack = false;
 
-    if (!consume(&stamp, 6)) return 100;
+  CueTrack currentTrack = {0};
+  CueTrack *tracks = NULL;
 
-    char ii[3] = {0}, mm[3] = {0}, ss[3] = {0}, ff[3] = {0};
-    strncpy(ii, stamp, 2); if (!consume(&stamp, 3)) return 100;
-    strncpy(mm, stamp, 2); if (!consume(&stamp, 3)) return 100;
-    strncpy(ss, stamp, 2); if (!consume(&stamp, 3)) return 100;
-    strncpy(ff, stamp, 2);
+  while (fgets(line, sizeof line, fp)) {
+    StringView l = str_of_cstr(line);
+    str_trim_by_predicate(&l, isspace);
+    if (l.count == 0)
+      continue;
 
-    timestamp->mm = atoi(mm);
-    timestamp->ss = atoi(ss);
-    timestamp->ff = atoi(ff);
-
-    return atoi(ii);
-}
-
-bool FCUE_ParseCUE(char* path, CueFile* cue) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) return false;
-
-    char line[1024];
-    char currentFile[1024];
-    char sIndex[3] = {0};
-
-    currentFile[0] = '\0';
-
-    CueTrack currentTrack = {0};
-    CueTrack* tracks = NULL;
-
-    char *p;
-    StringView linestr;
-    while (fgets(line, sizeof line, fp)) {
-        linestr = str_of_cstr(line);
-        p = line;
-        str_trim_by_predicate(&linestr, isspace);
-        // Blank line
-        if (linestr.count == 0) continue;
-
-        if (str_starts_with(linestr, str_of_cstr("REM GENRE"))) {
-           consume(&p, 9);
-           trimWL(&p);
-           trimWR(p);
-           p = unquote(p);
-           cue->genre = malloc(strlen(p) + 1);
-           strcpy(cue->genre, p);
-        } else if (strncmp("REM DATE", p, 8) == 0) {
-           consume(&p, 8);
-           trimWL(&p);
-           trimWR(p);
-
-           cue->date = atoi(p);
-        } else if (strncmp("REM DISCID", p, 10) == 0) {
-           consume(&p, 10);
-           trimWL(&p);
-           trimWR(p);
-           cue->discid = malloc(strlen(p) + 1);
-           strcpy(cue->discid, p);
-        } else if (strncmp("REM COMMENT", p, 11) == 0) {
-           consume(&p, 11);
-           trimWL(&p);
-           trimWR(p);
-           cue->comment = malloc(strlen(p) + 1);
-           strcpy(cue->comment, p);
-        } else if (strncmp("PERFORMER", p, 9) == 0 && currentTrack.trackNumber == 0) {
-           consume(&p, 9);
-           trimWL(&p);
-           trimWR(p);
-           p = unquote(p);
-           cue->performer = malloc(strlen(p) + 1);
-           strcpy(cue->performer, p);
-        } else if (strncmp("TITLE", p, 5) == 0 && currentTrack.trackNumber == 0) {
-           consume(&p, 5);
-           trimWL(&p);
-           trimWR(p);
-           p = unquote(p);
-           cue->title = malloc(strlen(p) + 1);
-           strcpy(cue->title, p);
-        } else if (strncmp("FILE", p, 4) == 0) {
-           memset(currentFile, 0, sizeof currentFile);
-
-           consume(&p, 4);
-           trimWL(&p);
-           trimWR(p);
-           strcpy(currentFile, unquoteFile(p));
-        } else if (strncmp("TRACK", p, 5) == 0) {
-            if (currentTrack.trackNumber != 0) {
-                arr_push(tracks, currentTrack);
-                currentTrack = (CueTrack) { 0 };
-            }
-            currentTrack.file = malloc(strlen(currentFile) + 1);
-            strcpy(currentTrack.file, currentFile);
-
-           consume(&p, 5);
-           trimWL(&p);
-
-           strncpy(sIndex, p, 2);
-           sIndex[2] = '\0';
-           currentTrack.trackNumber = atoi(sIndex);
-        } else if (strncmp("TITLE", p, 5) == 0) {
-           consume(&p, 5);
-           trimWL(&p);
-           trimWR(p);
-           p = unquote(p);
-
-           currentTrack.title = malloc(strlen(p) + 1);
-           strcpy(currentTrack.title, p);
-        } else if (strncmp("PERFORMER", p, 9) == 0) {
-           consume(&p, 9);
-           trimWL(&p);
-           trimWR(p);
-           p = unquote(p);
-
-           currentTrack.performer = malloc(strlen(p) + 1);
-           strcpy(currentTrack.performer, p);
-        } else if (strncmp("ISRC", p, 4) == 0) {
-           consume(&p, 4);
-           trimWL(&p);
-           trimWR(p);
-
-           currentTrack.isrc = malloc(strlen(p) + 1);
-           strcpy(currentTrack.isrc, p);
-        } else if (strncmp("INDEX", p, 5) == 0) {
-           trimWR(p);
-
-           CueTimestamp timestamp;
-           uint8_t index = FCUE_ParseTimestamp(&timestamp, p);
-
-           if (index == 0) {
-                currentTrack.index00 = timestamp;
-           } else if (index == 1) {
-                currentTrack.index01 = timestamp;
-           } else {
-               printf("Unsupported subindex: %u\n", index);
-           }
-        }
-    }
-
-    // Don't lose the last track
-    if (currentTrack.trackNumber != 0) {
+    if (str_eat_prefix(&l, REM_GENRE)) {
+      cue->genre = str_to_cstr(value(l));
+    } else if (str_eat_prefix(&l, REM_DATE)) {
+      int year;
+      str_trim_by_predicate(&l, isspace);
+      if (str_parse_uint(&l, &year))
+        cue->date = year;
+    } else if (str_eat_prefix(&l, REM_DISCID)) {
+      cue->discid = str_to_cstr(value(l));
+    } else if (str_eat_prefix(&l, REM_COMMENT)) {
+      cue->comment = str_to_cstr(value(l));
+    } else if (str_eat_prefix(&l, PERFORMER)) {
+      char *v = str_to_cstr(value(l));
+      if (inTrack) currentTrack.performer = v;
+      else         cue->performer = v;
+    } else if (str_eat_prefix(&l, TITLE)) {
+      char *v = str_to_cstr(value(l));
+      if (inTrack) currentTrack.title = v;
+      else         cue->title = v;
+    } else if (str_eat_prefix(&l, FILE_KW)) {
+      free(currentFile);
+      currentFile = str_to_cstr(token(&l));
+    } else if (str_eat_prefix(&l, TRACK)) {
+      if (inTrack)
         arr_push(tracks, currentTrack);
+      currentTrack = (CueTrack){0};
+      inTrack = true;
+
+      if (currentFile)
+        currentTrack.file = str_to_cstr(str_of_cstr(currentFile));
+
+      int n;
+      str_trim_by_predicate(&l, isspace);
+      if (str_parse_uint(&l, &n))
+        currentTrack.trackNumber = n;
+    } else if (str_eat_prefix(&l, ISRC)) {
+      currentTrack.isrc = str_to_cstr(value(l));
+    } else if (str_starts_with(l, INDEX)) {
+      CueTimestamp ts;
+      uint8_t index = FCUE_ParseTimestamp(&ts, l);
+
+      if (index == 0)       currentTrack.index00 = ts;
+      else if (index == 1)  currentTrack.index01 = ts;
+      else                  printf("Unsupported subindex: %u\n", index);
     }
+  }
 
-    fclose(fp);
+  if (inTrack)
+    arr_push(tracks, currentTrack);
 
-    cue->tracks = tracks;
-    return true;
-}
+  free(currentFile);
+  fclose(fp);
 
-static const char* str(const char* s) {
-    return s ? s : "";
+  cue->tracks = tracks;
+  return true;
 }

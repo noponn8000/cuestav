@@ -1,6 +1,8 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <assert.h>
 
 #include "stringview.h"
 
@@ -38,44 +40,22 @@ StringView str_split_by_delim(StringView *sv, char delim) {
 }
 
 void str_trim_by_predicate(StringView *sv, int (*istype)(int c)) {
-  size_t i = 0;
-  while (i < sv->count && istype(sv->data[i])) {
-      i += 1;
+  while (sv->count > 0 && istype(sv->data[0])) {
+    sv->data++; sv->count--;
   }
 
-  size_t j = sv->count - 1;
-  while (j >= 0 && istype(sv->data[j])) {
-    j--;
-  }
-
-  if (i >= j) {
-    return;
-  }
-
-  if (j - i + 1 >= 0) {
-    sv->count = j - i + 1;
-    sv->data += i;
+  while (sv->count > 0 && istype(sv->data[sv->count - 1])) {
+    sv->count--;
   }
 }
 
 void str_trim_by_delim(StringView *sv, char c) {
-  size_t i = 0;
-  while (i < sv->count && sv->data[i] == c) {
-      i += 1;
+  while (sv->count > 0 && sv->data[0] == c) {
+    sv->data++; sv->count--;
   }
 
-  size_t j = sv->count - 1;
-  while (j >= 0 && sv->data[j] == c) {
-    j--;
-  }
-
-  if (i >= j) {
-    return;
-  }
-
-  if (j - i + 1 >= 0) {
-    sv->count = j - i + 1;
-    sv->data += i;
+  while (sv->count > 0 && c == sv->data[sv->count - 1]) {
+    sv->count--;
   }
 }
 
@@ -106,28 +86,6 @@ StringView str_of_cstr(const char *cstr) {
   };
 }
 
-int is_quote(int c) {
-  return (c == '\"' || c == '\'');
-}
-
-#define strfmt "%.*s"
-#define strarg(s) (s).count, (s).data
-
-void test() {
-  StringView str = str_of_cstr("\"   hello  \"");
-  printf("Before: |"strfmt"|\n", strarg(str));
-
-  str_trim_by_predicate(&str, is_quote);
-  str_trim_by_predicate(&str, isspace);
-  printf("After: |"strfmt"|\n", strarg(str));
-
-  str = str_of_cstr("12345");
-  printf("Before: |"strfmt"|\n", strarg(str));
-  str_trim_left(&str, 2);
-  str_trim_right(&str, 2);
-  printf("After: |"strfmt"|\n", strarg(str));
-}
-
 bool str_starts_with(StringView a, StringView b) {
   if (a.count < b.count) return false;
   
@@ -150,4 +108,58 @@ bool str_ends_with(StringView a, StringView b) {
   }  
 
   return true;
+}
+
+// If str starts with c, trim it away
+bool str_eat_char(StringView* str, char c) {
+  if (str->count >= 1 && str_char_at(*str, 0) == c) {
+    str_trim_left(str, 1);
+    return true;
+  }
+
+  return false;
+}
+
+// If str starts with prefix, trim it away
+bool str_eat_prefix(StringView* str, StringView prefix) {
+  if (str_starts_with(*str, prefix)) {
+    str_trim_left(str, prefix.count);
+    return true;
+  }
+
+  return false;
+}
+
+// If str starts with an unsigned int, parse it and trim it.
+bool str_parse_uint(StringView* str, int* result) {
+  size_t n = 0;
+  int v = 0;
+
+  while (n < str->count && isdigit((unsigned char) str_char_at(*str, n))) {
+    v = 10 * v + (str_char_at(*str, n) - '0');
+    n++;
+  }
+
+  if (n==0)
+    return false;
+
+  str_trim_left(str, n);
+  *result = v;
+  return true;
+}
+
+// Allocate a c-string and copy the contents of str into it
+char* str_to_cstr(StringView str) {
+  char* dest = malloc(sizeof(char) * (str.count + 1));
+  memcpy(dest, str.data, str.count);
+  dest[str.count] = '\0';
+
+  return dest;
+}
+
+// Get char at index i of str
+char str_char_at(StringView str, int i) {
+  assert(i >= 0 && i < str.count);
+
+  return str.data[i];
 }

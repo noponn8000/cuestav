@@ -54,13 +54,12 @@ FileView* change_dir(FileView* files, int i) {
 }
 
 CueFile* openCue(FileView* files, int i) {
-  fprintf(stderr, "%d\n", get_file_type(files[i].path));
   if (i >= 0 && i < arr_len(files) && files[i].isRegular && get_file_type(files[i].path) == CUE) {
-      CueFile *cue = {0};
+      CueFile *cue = malloc(sizeof(CueFile));
       if (FCUE_ParseCUE(files[i].path, cue)) {
-        fprintf(stderr, "sucess"); return cue;
+        return cue;
       } else {
-        fprintf(stderr, "faliure");
+        free(cue);
         return NULL;
       }
   }
@@ -106,6 +105,8 @@ int main(int argc, char** argv) {
 
   bool tabLeft = true;
   bool paused = true;
+  int listIndexLeft = 0;
+  int listIndexRight = 0;
   int listIndex = 0;
 
   // User input
@@ -142,8 +143,24 @@ int main(int argc, char** argv) {
       case 'k':
         listIndex--;
         break;
-      case KEY_STAB:
+      case 'c':
+        for (int i = 0; i < arr_len(cues); i++) {
+          FCUE_FreeCUE(cues[i]);
+        }
+        arr_free(cues);
+        arr_init(cues);
+        listIndexRight = 0;
+        if (!tabLeft) listIndex = 0;
+        break;
+      case '\t':
         tabLeft = !tabLeft;
+        if (tabLeft) {
+          listIndexRight = listIndex;
+          listIndex = listIndexLeft;
+        } else {
+          listIndexLeft = listIndex;
+          listIndex = listIndexRight;
+        }
         break;
       // return key. doesn't work with KEY_ENTER for some reason
       case 10:
@@ -157,7 +174,6 @@ int main(int argc, char** argv) {
           } else {
             CueFile* cue = openCue(files, listIndex);
             if (cue != NULL) {
-              fprintf(stderr, "Failed to read .cue file\n");
               arr_push(cues, cue);
             }
           }
@@ -172,7 +188,16 @@ int main(int argc, char** argv) {
         listIndex = 0;
       }
     } else {
-      listIndex = 0;
+      int sum = 0;
+      for (int i = 0; i < arr_len(cues); i++) {
+        sum += 1 + arr_len(cues[i]->tracks);
+      }
+
+      if (listIndex < 0) {
+        listIndex = sum > 0 ? sum - 1 : 0;
+      } else if (listIndex >= sum) {
+        listIndex = 0;
+      }
     }
 
     werase(stdscr);
@@ -210,11 +235,32 @@ int main(int argc, char** argv) {
 
     CueFile *currentCue;
     CueTrack currentTrack;
+    int lines = 0;
     for (int i = 0; i < arr_len(cues); i++) {
       currentCue = cues[i];
-      for (int j = 0; j < arr_len(currentCue->tracks); i++) {
-        currentTrack = currentCue->tracks[i];
-        waddnstr(win_right, currentTrack.title, wrx - 4);
+      wmove(win_right, lines + 2, 1);
+
+      if (!tabLeft && listIndex == lines) {
+        wattron(win_right, A_BOLD);
+      }
+
+      wattron(win_right, A_ITALIC | COLOR_PAIR(3));
+      waddnstr(win_right, currentCue->title, wrx - 4);
+      wattroff(win_right, A_ITALIC | COLOR_PAIR(3) | A_BOLD);
+      lines++;
+
+      for (int j = 0; j < arr_len(currentCue->tracks); j++) {
+        currentTrack = currentCue->tracks[j];
+
+        wattron(win_right, COLOR_PAIR(2));
+        if (!tabLeft && listIndex == lines) {
+          wattron(win_right, A_BOLD);
+        }
+
+        wmove(win_right, lines + 2, 5);
+        waddnstr(win_right, currentTrack.title, wrx - 6);
+        wattroff(win_right, COLOR_PAIR(2) | A_BOLD);
+        lines++;
       }
     }
 

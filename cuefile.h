@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "cuetrack.h"
+#include "stringview.h"
 
 typedef struct {
     char* genre;
@@ -14,4 +15,5 @@ typedef struct {
 } CueFile;
 
 bool FCUE_ParseCUE(char* path, CueFile* cue);
-uint8_t FCUE_ParseTimestamp(CueTimestamp* timestamp, char* stamp);
+void FCUE_FreeCUE(CueFile *cue);
+uint8_t FCUE_ParseTimestamp(CueTimestamp* timestamp, StringView line);

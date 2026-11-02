@@ -89,6 +89,8 @@ FileView *get_files(const char *path) {
     // We only care about directories and regular files
     if (S_ISREG(statbuf.st_mode)) {
       file.type = get_file_type(dp->d_name);
+      // Skip files we don't support
+      if (file.type == OTHER) continue;
     } else if (S_ISDIR(statbuf.st_mode)) {
       file.isRegular = false;
     } else {
