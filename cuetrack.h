@@ -14,5 +14,6 @@ typedef struct {
     char* title;
     char* performer;
     char* isrc;
-    uint64_t duration;
+    uint64_t start;
+    uint64_t end;
 } CueTrack;

@@ -25,6 +25,9 @@
 #define MARGIN_L 1
 #define MARGIN_R 1
 
+const wchar_t* BAR_EMPTY = L"\xe29691";
+const wchar_t* BAR_FILLED = L"\xe29688";
+
 char CURRENT_DIR[PATH_MAX + 1];
 
 /* Miniaudio */
@@ -35,6 +38,7 @@ ma_sound sound;
 
 CueTrack currentTrack = {0};
 CueFile* currentFile = NULL;
+int nextTrackIndex = -1;
 
 bool playing = false;
 
@@ -86,11 +90,8 @@ ma_uint64 CueToPCM(CueTimestamp t, ma_uint32 sampleRate) {
     return cdFrames * sampleRate / 75;
 }
 
-void PCMToMinutes(ma_uint64 pcm, ma_uint32 sampleRate, uint8_t *minutes, uint8_t *seconds) {
-	ma_uint64 totalSeconds = 75 * (pcm / sampleRate);
-
-	*seconds = totalSeconds % 60;
-	*minutes = totalSeconds / 60;
+float PCMToSeconds(ma_uint64 pcm, ma_uint32 sampleRate) {
+	return ((float) pcm / sampleRate);
 }
 
 void getTrackDuration(CueFile* file, int index, ma_uint64* start, ma_uint64* end) {
@@ -110,14 +111,19 @@ void getTrackDuration(CueFile* file, int index, ma_uint64* start, ma_uint64* end
 
     bool hasNext = index + 1 < arr_len(file->tracks) &&
                    strcmp(file->tracks[index + 1].file, current.file) == 0;
-    if (hasNext) *end = CueToPCM(file->tracks[index + 1].index01, audioEngine.sampleRate);
-    else         *end = fileLen;
+    if (hasNext) {
+        *end = CueToPCM(file->tracks[index + 1].index01, audioEngine.sampleRate);
+        nextTrackIndex = index + 1;
+    }
+    else {
+        *end = fileLen;
+        nextTrackIndex = -1;
+    }
 }
 
 void playTrack(CueFile* file, int index) {
 	if (playing) {
     	ma_sound_uninit(&sound); 
-    	playing = false;
 	}
     
     result = ma_sound_init_from_file(&audioEngine, file->tracks[index].file, MA_SOUND_FLAG_STREAM,
@@ -127,12 +133,14 @@ void playTrack(CueFile* file, int index) {
         return;
     }
 
-	currentFile = file;
-    currentTrack = file->tracks[index]; 
-
 	ma_uint64 start; ma_uint64 end;
 	getTrackDuration(file, index, &start, &end);
     ma_sound_seek_to_pcm_frame(&sound, start);
+
+	currentFile = file;
+    currentTrack = file->tracks[index]; 
+    currentTrack.end = end;
+    currentTrack.start = start;
 
     ma_sound_start(&sound);
     playing = true;
@@ -169,6 +177,23 @@ bool getCueTrack(CueFile** cues, int listIndex, int* fileIndex, int* trackIndex)
     }
     *trackIndex = -1; *fileIndex = -1;
     return false;
+}
+
+void printUnicode(const char *str) {
+    size_t len = mbstowcs(NULL, str, 0);
+
+    if (len == (size_t) -1) {
+        return;
+    }
+
+    wchar_t *widestr = malloc((len + 1) * sizeof(wchar_t));
+    if (widestr == NULL)
+        return;
+
+    mbstowcs(widestr, str, len + 1);
+    addwstr(widestr);
+
+    free(widestr);
 }
 
 int main(int argc, char** argv) {
@@ -255,7 +280,6 @@ int main(int argc, char** argv) {
         }
         break;
        case ' ':
-       	playing = !playing;
        	if (playing) {
 			ma_sound_stop(&sound);
        	}
@@ -264,6 +288,7 @@ int main(int argc, char** argv) {
                ma_sound_start(&sound);
            }
        	}
+       	playing = !playing;
        	break;
       // return key. doesn't work with KEY_ENTER for some reason
       case 10:
@@ -287,6 +312,16 @@ int main(int argc, char** argv) {
           }
         }
         break;
+    }
+
+    if (playing && ma_sound_at_end(&sound)) {
+		if (nextTrackIndex != -1) {
+    		playTrack(currentFile, nextTrackIndex);
+		} else {
+    		playing = false;
+    		currentFile = NULL;
+    		currentTrack = (CueTrack) {0};
+		}
     }
 
     if (tabLeft) {
@@ -319,6 +354,7 @@ int main(int argc, char** argv) {
     wattron(win_left, A_BOLD);
     mvwprintw(win_left, 1, COLS / 4 - 2, "Files");
     wattroff(win_left, A_BOLD);
+    curs_set(0);
 
     // Draw files
     for (int i = 0; i < arr_len(files) && i < wly - 3; i++) {
@@ -386,6 +422,22 @@ int main(int argc, char** argv) {
         mvprintw(LINES - 2, 2, "▶");
 	} else {
         mvprintw(LINES - 2, 2, "⏸");
+	}
+
+	if (currentTrack.trackNumber > 0) {
+    	float pTrack = PCMToSeconds((uint64_t) currentTrack.end - currentTrack.start, audioEngine.sampleRate);
+    	float pCursor = 0;
+    	ma_sound_get_cursor_in_seconds(&sound, &pCursor);
+    	pCursor -= PCMToSeconds(currentTrack.start, audioEngine.sampleRate);
+
+		move(LINES - 1, 4);
+    	printw("%02u:%02u/%02u:%02u", (int) pCursor / 60, (int) pCursor % 60, (int) pTrack / 60, (int) pTrack % 60);
+
+    	int barWidth = COLS - 12;
+    	for (int i = 0; i < (pCursor/pTrack) * barWidth; i++) {
+        	move(LINES - 1, 16 + i);
+        	add_wch(WACS_BLOCK);
+    	}
 	}
 
 	if (currentTrack.trackNumber > 0) {
