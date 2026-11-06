@@ -3,7 +3,7 @@ CFLAGS  := -Wall -Wextra -O2 -g
 LDFLAGS := -lm -lncursesw 
 
 TARGET  := cuestav
-SRC     := main.c file_tree.c cuefile.c stringview.c
+SRC     := main.c file_tree.c cuefile.c stringview.c miniaudio.c
 OBJ     := $(SRC:%.c=build/%.o)
 
 all: $(TARGET)

@@ -11,3 +11,8 @@ A work-in-progress music player written in C99.
 
 Features:
 - .CUE file parsing
+- ncurses TUI
+- .wav, .mp3, .flac playback support with miniaudio
+
+Planned:
+- plugin .ape decoder

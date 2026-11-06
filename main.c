@@ -1,4 +1,5 @@
 #include <string.h>
+#include <unistd.h>
 #define _XOPEN_SOURCE_EXTENDED 1
 
 #include <locale.h>
@@ -10,6 +11,7 @@
 #include <panel.h>
 
 #include "file_tree.h"
+#include "miniaudio.h"
 #include "array.h"
 #include "cuefile.h"
 
@@ -24,6 +26,17 @@
 #define MARGIN_R 1
 
 char CURRENT_DIR[PATH_MAX + 1];
+
+/* Miniaudio */
+ma_result result;
+ma_engine audioEngine;
+ma_decoder decoder;
+ma_sound sound;
+
+CueTrack currentTrack = {0};
+CueFile* currentFile = NULL;
+
+bool playing = false;
 
 void set_win_border(WINDOW *win) {
     cchar_t ls, rs, ts, bs;
@@ -47,6 +60,7 @@ FileView* change_dir(FileView* files, int i) {
   if (i >= 0 && i < arr_len(files) && !files[i].isRegular) {
     memset(CURRENT_DIR, 0, sizeof(CURRENT_DIR));
     strcpy(CURRENT_DIR, files[i].path);
+    chdir(CURRENT_DIR);
     return get_files(files[i].path);
   }
 
@@ -67,6 +81,63 @@ CueFile* openCue(FileView* files, int i) {
   return NULL;
 }
 
+ma_uint64 CueToPCM(CueTimestamp t, ma_uint32 sampleRate) {
+    ma_uint64 cdFrames = ((ma_uint64)t.mm * 60 + t.ss) * 75 + t.ff;
+    return cdFrames * sampleRate / 75;
+}
+
+void PCMToMinutes(ma_uint64 pcm, ma_uint32 sampleRate, uint8_t *minutes, uint8_t *seconds) {
+	ma_uint64 totalSeconds = 75 * (pcm / sampleRate);
+
+	*seconds = totalSeconds % 60;
+	*minutes = totalSeconds / 60;
+}
+
+void getTrackDuration(CueFile* file, int index, ma_uint64* start, ma_uint64* end) {
+    CueTrack current = file->tracks[index];
+
+    ma_decoder probe;
+    if (ma_decoder_init_file(current.file, NULL, &probe) != MA_SUCCESS) {
+        printf("failed to open %s\n", current.file);
+        return;
+    }
+    ma_uint32 fileRate = probe.outputSampleRate;
+    ma_uint64 fileLen = 0;
+    ma_decoder_get_length_in_pcm_frames(&probe, &fileLen);
+    ma_decoder_uninit(&probe);
+
+    *start = CueToPCM(current.index01, audioEngine.sampleRate);
+
+    bool hasNext = index + 1 < arr_len(file->tracks) &&
+                   strcmp(file->tracks[index + 1].file, current.file) == 0;
+    if (hasNext) *end = CueToPCM(file->tracks[index + 1].index01, audioEngine.sampleRate);
+    else         *end = fileLen;
+}
+
+void playTrack(CueFile* file, int index) {
+	if (playing) {
+    	ma_sound_uninit(&sound); 
+    	playing = false;
+	}
+    
+    result = ma_sound_init_from_file(&audioEngine, file->tracks[index].file, MA_SOUND_FLAG_STREAM,
+                                     NULL, NULL, &sound);
+    if (result != MA_SUCCESS) {
+        printf("failed to init sound, code %d\n", result);
+        return;
+    }
+
+	currentFile = file;
+    currentTrack = file->tracks[index]; 
+
+	ma_uint64 start; ma_uint64 end;
+	getTrackDuration(file, index, &start, &end);
+    ma_sound_seek_to_pcm_frame(&sound, start);
+
+    ma_sound_start(&sound);
+    playing = true;
+}
+
 void make_windows(WINDOW** left, WINDOW** right, int* wlx, int* wly, int* wrx, int* wry) {
   if (left != NULL)
     delwin(*left);
@@ -83,6 +154,23 @@ void make_windows(WINDOW** left, WINDOW** right, int* wlx, int* wly, int* wrx, i
   *right = newwin(*wry, *wrx, TITLE_HEIGHT, splitx);
 }
 
+bool getCueTrack(CueFile** cues, int listIndex, int* fileIndex, int* trackIndex) {
+    int acc = 0;
+    for (int i = 0; i < arr_len(cues); i++) {
+		acc++;
+		*fileIndex = i;
+		for (int j = 0; j < arr_len(cues[i]->tracks); j++) {
+    		if (acc == listIndex) {
+				*trackIndex = j;
+				return true;
+    		}
+    		acc++;
+		}
+    }
+    *trackIndex = -1; *fileIndex = -1;
+    return false;
+}
+
 int main(int argc, char** argv) {
   char* path = DEFAULT_ROOT_DIRECTORY;
   DIR* dir;
@@ -92,6 +180,9 @@ int main(int argc, char** argv) {
     path = argv[1];
   }
   strcpy(CURRENT_DIR, path);
+
+  /* Miniaudio init */
+  if (ma_engine_init(NULL, &audioEngine) != MA_SUCCESS) { fprintf(stderr, "engine init failed\n"); return 1; }
 
   FileView* files = get_files(path);
   CueFile** cues = NULL;
@@ -117,6 +208,7 @@ int main(int argc, char** argv) {
   cbreak();
   keypad(stdscr, TRUE);  // Get special keys
   noecho(); // Don't echo input
+  timeout(100); // Timeout getch() after 100ms
 
   if (has_colors() == FALSE) {
     printf("Your terminal has no color support! Exiting.\n");
@@ -130,7 +222,7 @@ int main(int argc, char** argv) {
 
   make_windows(&win_left, &win_right, &wlx, &wly, &wrx, &wry); 
 
-  ch = ' ';
+  ch = '.';
   do {
     switch (ch) {
       case KEY_RESIZE:
@@ -162,6 +254,17 @@ int main(int argc, char** argv) {
           listIndex = listIndexRight;
         }
         break;
+       case ' ':
+       	playing = !playing;
+       	if (playing) {
+			ma_sound_stop(&sound);
+       	}
+       	else {
+           if (currentTrack.trackNumber > 0) {
+               ma_sound_start(&sound);
+           }
+       	}
+       	break;
       // return key. doesn't work with KEY_ENTER for some reason
       case 10:
         if (tabLeft) {
@@ -176,6 +279,11 @@ int main(int argc, char** argv) {
             if (cue != NULL) {
               arr_push(cues, cue);
             }
+          }
+        } else {
+          int trackIndex; int fileIndex;
+          if (getCueTrack(cues, listIndex, &fileIndex, &trackIndex)) {
+              playTrack(cues[fileIndex], trackIndex);
           }
         }
         break;
@@ -233,11 +341,11 @@ int main(int argc, char** argv) {
 
     // Draw cuesheets
 
-    CueFile *currentCue;
-    CueTrack currentTrack;
+    CueFile *cue;
+    CueTrack track;
     int lines = 0;
     for (int i = 0; i < arr_len(cues); i++) {
-      currentCue = cues[i];
+      cue = cues[i];
       wmove(win_right, lines + 2, 1);
 
       if (!tabLeft && listIndex == lines) {
@@ -245,12 +353,12 @@ int main(int argc, char** argv) {
       }
 
       wattron(win_right, A_ITALIC | COLOR_PAIR(3));
-      waddnstr(win_right, currentCue->title, wrx - 4);
+      waddnstr(win_right, cue->title, wrx - 4);
       wattroff(win_right, A_ITALIC | COLOR_PAIR(3) | A_BOLD);
       lines++;
 
-      for (int j = 0; j < arr_len(currentCue->tracks); j++) {
-        currentTrack = currentCue->tracks[j];
+      for (int j = 0; j < arr_len(cue->tracks); j++) {
+        track = cue->tracks[j];
 
         wattron(win_right, COLOR_PAIR(2));
         if (!tabLeft && listIndex == lines) {
@@ -258,7 +366,7 @@ int main(int argc, char** argv) {
         }
 
         wmove(win_right, lines + 2, 5);
-        waddnstr(win_right, currentTrack.title, wrx - 6);
+        waddnstr(win_right, track.title, wrx - 6);
         wattroff(win_right, COLOR_PAIR(2) | A_BOLD);
         lines++;
       }
@@ -273,6 +381,17 @@ int main(int argc, char** argv) {
     attroff(COLOR_PAIR(1) | A_BLINK);
 
     mvprintw(1, 1, "Current directory: %s", CURRENT_DIR);
+
+	if (playing) {
+        mvprintw(LINES - 2, 2, "▶");
+	} else {
+        mvprintw(LINES - 2, 2, "⏸");
+	}
+
+	if (currentTrack.trackNumber > 0) {
+    	move(LINES - 2, 4);
+    	addnstr(currentTrack.title, COLS - 6);
+	}
 
     // Queue refreshes in the order parent -> child
     wnoutrefresh(stdscr);
