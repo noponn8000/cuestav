@@ -116,7 +116,7 @@ void getTrackDuration(CueFile* file, int index, ma_uint64* start, ma_uint64* end
         nextTrackIndex = index + 1;
     }
     else {
-        *end = fileLen;
+        *end = fileLen * (float) audioEngine.sampleRate / fileRate;
         nextTrackIndex = -1;
     }
 }
